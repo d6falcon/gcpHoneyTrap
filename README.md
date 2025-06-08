@@ -1,6 +1,6 @@
 # GCP HoneyTrap SSH Server
 
-A high-interaction SSH honeypot that simulates a corporate GCP environment using AI-driven responses. This project is forked from and inspired by [splunk/DECEIVE](https://github.com/splunk/DECEIVE).
+A high-interaction SSH honeypot that simulates a corporate GCP environment using AI-driven responses as a fall back. This project is forked from and inspired by [splunk/DECEIVE](https://github.com/splunk/DECEIVE).
 
 ## Features
 
