@@ -9,6 +9,7 @@ import sys
 import json
 import os
 import traceback
+import random
 from typing import Optional
 import logging
 import datetime
@@ -17,7 +18,11 @@ from base64 import b64encode
 from operator import itemgetter
 from langchain_openai import ChatOpenAI
 from langchain_aws import ChatBedrock, ChatBedrockConverse
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langcha    elif command == "echo $SHELL" or command == "echo $0":
+        return "/bin/ksh"
+    elif command == "whoami":
+        return username
+    elif command == "id":google_genai import ChatGoogleGenerativeAI
 from langchain_ollama import ChatOllama 
 from langchain_core.messages import HumanMessage, SystemMessage, trim_messages
 from langchain_core.chat_history import BaseChatMessageHistory, InMemoryChatMessageHistory
@@ -183,36 +188,90 @@ async def handle_client(process: asyncssh.SSHServerProcess, server: MySSHServer)
     # This is the main loop for handling SSH client connections. 
     # Any user interaction should be done here.
 
+    # Session timeout of 3 minutes
+    TIMEOUT_SECONDS = 180
+    last_activity = datetime.datetime.now()
+
+    def check_timeout():
+        if (datetime.datetime.now() - last_activity).total_seconds() > TIMEOUT_SECONDS:
+            logger.info("Session timeout - no activity for 3 minutes", extra={"username": process.get_extra_info('username')})
+            process.stdout.write("\nSession timed out after 3 minutes of inactivity\n")
+            process.exit(0)
+            return True
+        return False
+
     # Give each session a unique name
     task_uuid = f"session-{uuid.uuid4()}"
     current_task = asyncio.current_task()
     current_task.set_name(task_uuid)
 
     llm_config = {"configurable": {"session_id": task_uuid}}
+    username = process.get_extra_info('username')
+
+    # MOTD message
+    motd = """
+╔═══════════════════════ SECURITY NOTICE ══════════════════════╗
+║                                                              ║
+║                  CORPORATE SYSTEM ACCESS                     ║
+║                                                             ║
+║   • This is a restricted corporate system                   ║
+║   • All activities are monitored and logged                 ║
+║   • Unauthorized access is strictly prohibited              ║
+║   • Violations will result in:                             ║
+║     - Immediate account termination                         ║
+║     - Legal action and criminal prosecution                 ║
+║     - Civil penalties and damages                          ║
+║                                                             ║
+║   By continuing to use this system, you explicitly          ║
+║   consent to continuous monitoring and agree to             ║
+║   comply with all corporate security policies.              ║
+║                                                             ║
+╚══════════════════════════════════════════════════════════════╝
+
+System Information:
+------------------
+Hostname: abhimanyu
+Last login: {} UTC from {}
+\n""".format(
+        datetime.datetime.now(datetime.timezone.utc).strftime("%a %b %d %H:%M:%S %Y"),
+        process.get_extra_info('peername')[0] if process.get_extra_info('peername') else 'unknown'
+    )
 
     try:
         if process.command:
             # Handle non-interactive command execution
             command = process.command
             logger.info("User input", extra={"details": b64encode(command.encode('utf-8')).decode('utf-8'), "interactive": False})
-            llm_response = await with_message_history.ainvoke(
-                {
-                    "messages": [HumanMessage(content=command)],
-                    "username": process.get_extra_info('username'),
-                    "interactive": False
-                },
-                    config=llm_config
-            )
-            process.stdout.write(f"{llm_response.content}")
-            logger.info("LLM response", extra={"details": b64encode(llm_response.content.encode('utf-8')).decode('utf-8'), "interactive": False})
+            
+            # Try to handle Linux command first
+            cmd_output = handle_linux_command(command, username)
+            if cmd_output is not None:
+                process.stdout.write(f"{cmd_output}\n")
+                logger.info("Command output", extra={"details": b64encode(cmd_output.encode('utf-8')).decode('utf-8'), "interactive": False})
+            else:
+                # Fall back to LLM for unhandled commands
+                llm_response = await with_message_history.ainvoke(
+                    {
+                        "messages": [HumanMessage(content=command)],
+                        "username": username,
+                        "interactive": False
+                    },
+                        config=llm_config
+                )
+                process.stdout.write(f"{llm_response.content}")
+                logger.info("LLM response", extra={"details": b64encode(llm_response.content.encode('utf-8')).decode('utf-8'), "interactive": False})
+            
             await session_summary(process, llm_config, with_message_history, server)
             process.exit(0)
         else:
             # Handle interactive session
+            # Display MOTD
+            process.stdout.write(motd)
+            
             llm_response = await with_message_history.ainvoke(
                 {
                     "messages": [HumanMessage(content="ignore this message")],
-                    "username": process.get_extra_info('username'),
+                    "username": username,
                     "interactive": True
                 },
                     config=llm_config
@@ -222,25 +281,34 @@ async def handle_client(process: asyncssh.SSHServerProcess, server: MySSHServer)
             logger.info("LLM response", extra={"details": b64encode(llm_response.content.encode('utf-8')).decode('utf-8'), "interactive": True})
 
             async for line in process.stdin:
+                if check_timeout():
+                    return
+                last_activity = datetime.datetime.now()
                 line = line.rstrip('\n')
                 logger.info("User input", extra={"details": b64encode(line.encode('utf-8')).decode('utf-8'), "interactive": True})
 
-                # Send the command to the LLM and give the response to the user
-                llm_response = await with_message_history.ainvoke(
-                    {
-                        "messages": [HumanMessage(content=line)],
-                        "username": process.get_extra_info('username'),
-                        "interactive": True
-                    },
-                        config=llm_config
-                )
-                if llm_response.content == "XXX-END-OF-SESSION-XXX":
-                    await session_summary(process, llm_config, with_message_history, server)
-                    process.exit(0)
-                    return
+                # Try to handle Linux command first
+                cmd_output = handle_linux_command(line, username)
+                if cmd_output is not None:
+                    process.stdout.write(f"{cmd_output}\n")
+                    logger.info("Command output", extra={"details": b64encode(cmd_output.encode('utf-8')).decode('utf-8'), "interactive": True})
                 else:
-                    process.stdout.write(f"{llm_response.content}")
-                    logger.info("LLM response", extra={"details": b64encode(llm_response.content.encode('utf-8')).decode('utf-8'), "interactive": True})
+                    # Fall back to LLM for unhandled commands
+                    llm_response = await with_message_history.ainvoke(
+                        {
+                            "messages": [HumanMessage(content=line)],
+                            "username": username,
+                            "interactive": True
+                        },
+                            config=llm_config
+                    )
+                    if llm_response.content == "XXX-END-OF-SESSION-XXX":
+                        await session_summary(process, llm_config, with_message_history, server)
+                        process.exit(0)
+                        return
+                    else:
+                        process.stdout.write(f"{llm_response.content}")
+                        logger.info("LLM response", extra={"details": b64encode(llm_response.content.encode('utf-8')).decode('utf-8'), "interactive": True})
 
     except asyncssh.BreakReceived:
         pass
@@ -263,7 +331,18 @@ async def start_server() -> None:
         server_factory=MySSHServer,
         server_host_keys=config['ssh'].get("host_priv_key", "ssh_host_key"),
         process_factory=lambda process: handle_client(process, MySSHServer()),
-        server_version=config['ssh'].get("server_version_string", "SSH-2.0-OpenSSH_8.2p1 Ubuntu-4ubuntu0.3")
+        server_version=config['ssh'].get("server_version_string", "SSH-2.0-OpenSSH_8.2p1 Ubuntu-4ubuntu0.3"),
+        banner="""
+╔════════════════════════ WARNING ════════════════════════╗
+║                                                         ║
+║   RESTRICTED ACCESS - CORPORATE ASSET                   ║
+║                                                        ║
+║   This system is for authorized users only.            ║
+║   All activities are logged and monitored.             ║
+║   Unauthorized access will be prosecuted.              ║
+║                                                        ║
+╚═════════════════════════════════════════════════════════╝
+"""
     )
 
 class ContextFilter(logging.Filter):
@@ -355,6 +434,196 @@ def get_prompts(prompt: Optional[str], prompt_file: Optional[str]) -> dict:
         "user_prompt": user_prompt
     }
 
+def handle_linux_command(command: str, username: str) -> Optional[str]:
+    """
+    Emulate basic Linux commands to make the honeypot more realistic.
+    
+    Args:
+        command: The command to execute
+        username: The current username from the SSH session
+        
+    Returns:
+        The command output as a string, or None if the command is not handled
+    """
+    command = command.strip()
+    parts = command.split()
+    base_cmd = parts[0] if parts else ""
+    
+    # Basic command handling
+    if command == "whoami":
+        return username
+    elif command == "id":
+        # Emulate a typical Linux id command output
+        return f"uid=1000({username}) gid=1000({username}) groups=1000({username}),4(adm),24(cdrom),27(sudo),30(dip),46(plugdev),120(lpadmin),131(lxd),132(sambashare)"
+    elif command.startswith("echo "):
+        # Simple echo command
+        return command[5:]  # Return everything after "echo "
+    elif command == "pwd":
+        return f"/home/{username}"
+    elif base_cmd == "ls":
+        # Basic ls command
+        if len(parts) == 1 or parts[1] == "." or parts[1] == "./":
+            return "bin\nDocuments\nDownloads\nMusic\nPictures\nPublic\nTemplates\nVideos"
+        elif parts[1] == "-la" or parts[1] == "-l":
+            return f"""total 48
+drwxr-xr-x  4 {username} {username} 4096 Jun  8 12:34 .
+drwxr-xr-x 24 root     root     4096 Jun  8 12:34 ..
+-rw-------  1 {username} {username}  320 Jun  8 12:34 .sh_history
+-rw-r--r--  1 {username} {username} 3771 Jun  8 12:34 .kshrc
+drwx------  2 {username} {username} 4096 Jun  8 12:34 .cache
+-rw-r--r--  1 {username} {username}  907 Jun  8 12:34 .profile
+-rw-r--r--  1 {username} {username}  256 Jun  8 12:34 .env
+drwxr-xr-x  2 {username} {username} 4096 Jun  8 12:34 bin
+drwxr-xr-x  2 {username} {username} 4096 Jun  8 12:34 Documents"""
+        return "ls: cannot access '{}': No such file or directory".format(parts[1])
+    elif base_cmd == "uname":
+        if "-a" in parts:
+            return "Linux abhimanyu 5.15.0-1036-aws #38-Ubuntu SMP Thu Jun 8 12:34:56 UTC 2025 x86_64 x86_64 x86_64 GNU/Linux"
+        return "Linux"
+    elif base_cmd == "ps":
+        if "-ef" in parts or "aux" in parts:
+            return f"""USER         PID %CPU %MEM    VSZ   RSS TTY      STAT START   TIME COMMAND
+root           1  0.0  0.0 167604 11768 ?        Ss   12:34   0:02 /sbin/init
+root           2  0.0  0.0      0     0 ?        S    12:34   0:00 [kthreadd]
+root         594  0.0  0.0  94088  7052 ?        Ss   12:34   0:00 /usr/sbin/sshd -D
+{username}    1001  0.0  0.0  19872  4128 pts/0    Ss   12:34   0:00 -ksh
+{username}    1234  0.0  0.0  21136  5264 pts/0    R+   12:34   0:00 ps -ef"""
+        return f"""  PID TTY          TIME CMD
+ 1001 pts/0    00:00:00 ksh
+ 1234 pts/0    00:00:00 ps"""
+    elif base_cmd == "top":
+        return f"""top - 12:34:56 up 1 day, 23:45,  1 user,  load average: 0.08, 0.03, 0.01
+Tasks: 123 total,   1 running, 122 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  0.7 us,  0.3 sy,  0.0 ni, 98.9 id,  0.0 wa,  0.0 hi,  0.0 si,  0.0 st
+MiB Mem :   3934.9 total,    412.6 free,   1332.4 used,   2189.9 buff/cache
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.   2321.2 avail Mem 
+
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+      1 root      20   0  167604  11768   8352 S   0.0   0.3   0:02.03 systemd
+    594 root      20   0   94088   7052   6320 S   0.0   0.2   0:00.00 sshd    1001 {username}   20   0   19872   4128   3216 S   0.0   0.1   0:00.00 ksh"""
+    elif base_cmd == "df":
+        if "-h" in parts:
+            return """Filesystem      Size  Used Avail Use% Mounted on
+udev            1.9G     0  1.9G   0% /dev
+tmpfs           394M  1.1M  393M   1% /run
+/dev/xvda1       20G   12G  7.2G  62% /
+tmpfs           2.0G     0  2.0G   0% /dev/shm
+tmpfs           5.0M     0  5.0M   0% /run/lock"""
+        return """Filesystem     1K-blocks    Used Available Use% Mounted on
+udev             1985040       0   1985040   0% /dev
+tmpfs             403112    1124    401988   1% /run
+/dev/xvda1      20926624 12495552   7512160  62% /
+tmpfs            2015544       0   2015544   0% /dev/shm
+tmpfs               5120       0      5120   0% /run/lock"""
+    elif base_cmd == "free":
+        if "-h" in parts:
+            return """               total        used        free      shared  buff/cache   available
+Mem:           3.8Gi       1.3Gi       412Mi       1.1Mi       2.1Gi       2.3Gi
+Swap:             0B          0B          0B"""
+        return """               total        used        free      shared  buff/cache   available
+Mem:        3934912     1332416      412616        1124     2189880     2321248
+Swap:             0           0           0"""
+    elif command == "uptime":
+        return " 12:34:56 up 1 day, 23:45,  1 user,  load average: 0.08, 0.03, 0.01"
+    elif command == "env" or command == "printenv":
+        return f"""SHELL=/bin/ksh
+HISTFILE=/home/{username}/.sh_history
+HISTSIZE=1000
+HOME=/home/{username}
+LOGNAME={username}
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
+PWD=/home/{username}
+TERM=xterm
+TMOUT=180
+USER={username}
+VISUAL=vi
+EDITOR=vi"""
+    elif base_cmd == "cat":
+        if len(parts) > 1:
+            if parts[1] == ".kshrc":
+                return f"""# Korn shell configuration
+PS1='[{username}@abhimanyu $PWD]$ '
+set -o emacs
+HISTFILE=/home/{username}/.sh_history
+HISTSIZE=1000
+TMOUT=180
+PATH=$HOME/bin:$PATH
+export PS1 HISTFILE HISTSIZE TMOUT PATH
+
+# Security settings - session timeout after 3 minutes of inactivity
+readonly TMOUT"""
+            elif parts[1] == "/etc/issue":
+                return "Ubuntu 22.04.3 LTS \\n \\l"
+            elif parts[1] == "/etc/*release" or parts[1] == "/etc/os-release":
+                return '''PRETTY_NAME="Ubuntu 22.04.3 LTS (Jammy Jellyfish)"
+NAME="Ubuntu"
+VERSION_ID="22.04"
+VERSION="22.04.3 LTS (Jammy Jellyfish)"
+VERSION_CODENAME=jammy
+ID=ubuntu
+ID_LIKE=debian
+HOME_URL="https://www.ubuntu.com/"
+SUPPORT_URL="https://help.ubuntu.com/"
+BUG_REPORT_URL="https://bugs.launchpad.net/ubuntu/"
+PRIVACY_POLICY_URL="https://www.ubuntu.com/legal/terms-and-policies/privacy-policy"
+UBUNTU_CODENAME=jammy'''
+            return f"cat: {parts[1]}: No such file or directory"
+    
+    # Return None for unhandled commands
+    logger.info("Unhandled command", extra={"command": command, "username": username})
+    return None
+
+def generate_historical_logs(logger, days=14):
+    """Generate realistic historical logs to make the honeypot appear as a legitimate GCP server."""
+    
+    # Common GCP service account and bucket names
+    service_account = "asset-mgmt-sa@project-id-123456.iam.gserviceaccount.com"
+    bucket_name = "asset-inventory-prod-bucket-123456"
+    api_endpoint = "https://asset-inventory-api.example.com/v1"
+    
+    # Generate logs for the past 14 days
+    now = datetime.datetime.now(datetime.timezone.utc)
+    
+    # Common error messages and events
+    events = [
+        ("GCS bucket connection timeout while uploading asset inventory", "ERROR"),
+        ("Failed to refresh OAuth2 token for service account", "ERROR"),
+        ("Asset management API rate limit exceeded", "WARNING"),
+        ("Successfully renewed service account credentials", "INFO"),
+        ("Asset inventory sync completed", "INFO"),
+        ("Failed to retrieve metadata from compute instance", "ERROR"),
+        ("Connection reset while accessing Cloud Storage", "ERROR"),
+        ("Successfully uploaded daily asset report", "INFO"),
+        ("Asset API returned 503 Service Unavailable", "ERROR"),
+        ("Retrying connection to Cloud Storage (attempt 3/5)", "WARNING")
+    ]
+    
+    # Generate random but realistic looking logs
+    for i in range(days * 24 * 4):  # 4 entries per hour for 14 days
+        log_time = now - datetime.timedelta(minutes=15*i)
+        event, level = events[i % len(events)]
+        
+        extra = {
+            "service_account": service_account,
+            "src_ip": "10.128.0.2",  # Internal GCP IP
+            "dst_ip": "172.217.0.1" if "api" in event.lower() else "storage.googleapis.com",
+            "src_port": "45678",
+            "dst_port": "443",
+            "task_name": "asset-mgmt-service",
+        }
+        
+        if "bucket" in event.lower():
+            extra["bucket"] = bucket_name
+        if "api" in event.lower():
+            extra["endpoint"] = api_endpoint
+            
+        if level == "ERROR":
+            logger.error(event, extra=extra)
+        elif level == "WARNING":
+            logger.warning(event, extra=extra)
+        else:
+            logger.info(event, extra=extra)
+
 #### MAIN ####
 
 try:
@@ -445,6 +714,9 @@ try:
 
     f = ContextFilter()
     logger.addFilter(f)
+
+    # Generate historical logs to make the honeypot more convincing
+    generate_historical_logs(logger)
 
     # Now get access to the LLM
 
