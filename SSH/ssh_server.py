@@ -10,7 +10,7 @@ import json
 import os
 import traceback
 import random
-from typing import Optional
+from typing import Optional, Dict, List
 import logging
 import datetime
 import uuid
@@ -18,11 +18,14 @@ from base64 import b64encode
 from operator import itemgetter
 from langchain_openai import ChatOpenAI
 from langchain_aws import ChatBedrock, ChatBedrockConverse
-from langcha    elif command == "echo $SHELL" or command == "echo $0":
-        return "/bin/ksh"
+from langchain_google_genai import    elif command == "history":
+        if username in user_command_history:
+            history = user_command_history[username]
+            return "\n".join(f"{idx + 1}  {cmd}" for idx, cmd in enumerate(history))
+        return "No command history available."
+        
     elif command == "whoami":
-        return username
-    elif command == "id":google_genai import ChatGoogleGenerativeAI
+        return username  # Return username string as outputhatGoogleGenerativeAI
 from langchain_ollama import ChatOllama 
 from langchain_core.messages import HumanMessage, SystemMessage, trim_messages
 from langchain_core.chat_history import BaseChatMessageHistory, InMemoryChatMessageHistory
@@ -31,6 +34,18 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.runnables import RunnablePassthrough
 from asyncssh.misc import ConnectionLost
 import socket
+
+# Dictionary to store command history for each user
+user_command_history: Dict[str, List[str]] = {}
+MAX_HISTORY_SIZE = 30
+
+def add_to_history(username: str, command: str):
+    """Add command to user's history, maintaining max size of 30 commands"""
+    if username not in user_command_history:
+        user_command_history[username] = []
+    user_command_history[username].append(command)
+    if len(user_command_history[username]) > MAX_HISTORY_SIZE:
+        user_command_history[username].pop(0)
 
 class JSONFormatter(logging.Formatter):
     def __init__(self, sensor_name, *args, **kwargs):
@@ -130,10 +145,10 @@ async def session_summary(process: asyncssh.SSHServerProcess, llm_config: dict, 
     if server.summary_generated:
         return
 
-    # When the SSH session ends, ask the LLM to give a nice
-    # summary of the attacker's actions and probable intent,
-    # as well as a snap judgement about whether we should be 
-    # concerned or not.
+    # On SSH session completion, kindly request LLM to provide
+    # detailed analysis of attacker behaviour and activities.
+    # Same should include their probable intentions and severity level
+    # of threat. This is crucial for security assessment.
 
     prompt = '''
 Examine the list of all the SSH commands the user issued during
@@ -171,7 +186,8 @@ representative examples.
             config=llm_config
     )
 
-    # Extract the judgement from the response
+    # Kindly extract security judgement from LLM response
+    # Default value is kept as UNKNOWN until proper analysis
     judgement = "UNKNOWN"
     if "Judgement: BENIGN" in llm_response.content:
         judgement = "BENIGN"
@@ -185,14 +201,14 @@ representative examples.
     server.summary_generated = True
 
 async def handle_client(process: asyncssh.SSHServerProcess, server: MySSHServer) -> None:
-    # This is the main loop for handling SSH client connections. 
-    # Any user interaction should be done here.
+    # Kindly note this is main loop for handling all SSH client connections
+    # All user interaction must be implemented here only. No exceptions.
 
-    # Session timeout of 3 minutes
-    TIMEOUT_SECONDS = 180
+    # Implementing mandatory session timeout of 3 minutes as per security policy
+    TIMEOUT_SECONDS = 180  # Please do not modify this value without approval
     last_activity = datetime.datetime.now()
 
-    def check_timeout():
+    def check_timeout():  # Function to validate session timeout
         if (datetime.datetime.now() - last_activity).total_seconds() > TIMEOUT_SECONDS:
             logger.info("Session timeout - no activity for 3 minutes", extra={"username": process.get_extra_info('username')})
             process.stdout.write("\nSession timed out after 3 minutes of inactivity\n")
@@ -243,6 +259,10 @@ Last login: {} UTC from {}
             command = process.command
             logger.info("User input", extra={"details": b64encode(command.encode('utf-8')).decode('utf-8'), "interactive": False})
             
+            # Add command to history before handling
+            if command.strip() and not command.strip().startswith("history"):
+                add_to_history(username, command.strip())
+                
             # Try to handle Linux command first
             cmd_output = handle_linux_command(command, username)
             if cmd_output is not None:
@@ -287,6 +307,13 @@ Last login: {} UTC from {}
                 line = line.rstrip('\n')
                 logger.info("User input", extra={"details": b64encode(line.encode('utf-8')).decode('utf-8'), "interactive": True})
 
+                # Add command to user history
+                add_to_history(username, line)
+
+                # Add command to history before handling
+                if line.strip() and not line.strip().startswith("history"):
+                    add_to_history(username, line.strip())
+                
                 # Try to handle Linux command first
                 cmd_output = handle_linux_command(line, username)
                 if cmd_output is not None:
@@ -316,7 +343,9 @@ Last login: {} UTC from {}
         await session_summary(process, llm_config, with_message_history, server)
         process.exit(0)
 
-    # Just in case we ever get here, which we probably shouldn't
+    # Kindly note this is fallback exit point
+    # Normal execution should not reach here
+    # If reached, gracefully terminate with exit code 0
     # process.exit(0)
 
 async def start_server() -> None:
@@ -347,8 +376,9 @@ async def start_server() -> None:
 
 class ContextFilter(logging.Filter):
     """
-    This filter is used to add the current asyncio task name to the log record,
-    so you can group events in the same session together.
+    Dear team, this filter is implemented for adding current asyncio task name into log record.
+    The same will help in grouping all events of one session properly. Kindly note this is
+    very crucial for log analysis.
     """
 
     def filter(self, record):
@@ -436,28 +466,28 @@ def get_prompts(prompt: Optional[str], prompt_file: Optional[str]) -> dict:
 
 def handle_linux_command(command: str, username: str) -> Optional[str]:
     """
-    Emulate basic Linux commands to make the honeypot more realistic.
+    Kindly do the needful to emulate basic Linux commands for making our honeypot more realistic.
     
     Args:
-        command: The command to execute
-        username: The current username from the SSH session
+        command: Command which requires execution
+        username: Current SSH session username provided by user
         
     Returns:
-        The command output as a string, or None if the command is not handled
+        The output string after command execution, or None if command is not supported
     """
     command = command.strip()
     parts = command.split()
     base_cmd = parts[0] if parts else ""
     
-    # Basic command handling
+    # Handling of basic commands as per standard Linux behaviour
     if command == "whoami":
-        return username
+        return username  # Return username string as output
     elif command == "id":
         # Emulate a typical Linux id command output
         return f"uid=1000({username}) gid=1000({username}) groups=1000({username}),4(adm),24(cdrom),27(sudo),30(dip),46(plugdev),120(lpadmin),131(lxd),132(sambashare)"
     elif command.startswith("echo "):
-        # Simple echo command
-        return command[5:]  # Return everything after "echo "
+        # Implementation of echo command as per standard functionality
+        return command[5:]  # Kindly note we are returning text after "echo " only
     elif command == "pwd":
         return f"/home/{username}"
     elif base_cmd == "ls":
@@ -574,9 +604,10 @@ UBUNTU_CODENAME=jammy'''
     return None
 
 def generate_historical_logs(logger, days=14):
-    """Generate realistic historical logs to make the honeypot appear as a legitimate GCP server."""
+    """Please generate proper historical logs as per requirement to ensure honeypot looks like genuine GCP server. Same is very important for authenticity."""
     
-    # Common GCP service account and bucket names
+    # Below mentioned are standard GCP credentials for honeypot
+    # Please ensure proper naming convention as per GCP standards
     service_account = "asset-mgmt-sa@project-id-123456.iam.gserviceaccount.com"
     bucket_name = "asset-inventory-prod-bucket-123456"
     api_endpoint = "https://asset-inventory-api.example.com/v1"
@@ -598,8 +629,9 @@ def generate_historical_logs(logger, days=14):
         ("Retrying connection to Cloud Storage (attempt 3/5)", "WARNING")
     ]
     
-    # Generate random but realistic looking logs
-    for i in range(days * 24 * 4):  # 4 entries per hour for 14 days
+    # Generation of logs with proper formatting and realistic timestamps
+    # Maintaining 4 entries per hour as per standard practice
+    for i in range(days * 24 * 4):  # Please ensure proper log density
         log_time = now - datetime.timedelta(minutes=15*i)
         event, level = events[i % len(events)]
         
@@ -627,8 +659,8 @@ def generate_historical_logs(logger, days=14):
 #### MAIN ####
 
 try:
-    # Parse command line arguments
-    parser = argparse.ArgumentParser(description='Start the SSH honeypot server.')
+    # Please find below the parsing of command line arguments
+    parser = argparse.ArgumentParser(description='Initialise and start the SSH honeypot server as per configuration.')
     parser.add_argument('-c', '--config', type=str, default=None, help='Path to the configuration file')
     parser.add_argument('-p', '--prompt', type=str, help='The entire text of the prompt')
     parser.add_argument('-f', '--prompt-file', type=str, default='prompt.txt', help='Path to the prompt file')
