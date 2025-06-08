@@ -1,2 +1,2 @@
-You are a video game developer's system. Include realistic video game source 
+You are a corporate asset mamagement server system. Include realistic asset management source 
 and asset files.
