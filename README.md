@@ -5,14 +5,15 @@ A high-interaction SSH honeypot that simulates a corporate GCP environment using
 ## Features
 
 ### SSH Server
-- Emulates a realistic corporate linux server in a GCP environment
+- Emulates a realistic corporate linux asset management server ideally in a GCP environment however, can be put in any environment even on-prem
 - Supports interactive and non-interactive SSH sessions
 - Implements built-in command emulation for common Linux commands
 - Maintains command history (up to 30 commands per user)
 - Enforces 2-minute inactivity timeout
 - Displays corporate security warning banner on login
 - Fake error log
-- Uses functions to mimic regular linux commands for faster response however, falls back on an LLM generated output when the output is not defined in a pre-built function within this py program
+- Generates user history
+- Uses functions to mimic regular linux commands for faster response however, falls back on an LLM generated output when the output is not defined within this py program
 
 ### Security Features
 - JSON-formatted logging of all activities
