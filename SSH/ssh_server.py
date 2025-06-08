@@ -204,14 +204,14 @@ async def handle_client(process: asyncssh.SSHServerProcess, server: MySSHServer)
     # Kindly note this is main loop for handling all SSH client connections
     # All user interaction must be implemented here only. No exceptions.
 
-    # Implementing mandatory session timeout of 3 minutes as per security policy
-    TIMEOUT_SECONDS = 180  # Please do not modify this value without approval
+    # Implementing mandatory session timeout of 2 minutes as per security policy 
+    TIMEOUT_SECONDS = 120  # Please do not modify this value without approval
     last_activity = datetime.datetime.now()
 
     def check_timeout():  # Function to validate session timeout
         if (datetime.datetime.now() - last_activity).total_seconds() > TIMEOUT_SECONDS:
-            logger.info("Session timeout - no activity for 3 minutes", extra={"username": process.get_extra_info('username')})
-            process.stdout.write("\nSession timed out after 3 minutes of inactivity\n")
+            logger.info("Session timeout - no activity for 2 minutes", extra={"username": process.get_extra_info('username')})
+            process.stdout.write("\nSession timed out after 2 minutes of inactivity\n")
             process.exit(0)
             return True
         return False
