@@ -508,7 +508,7 @@ drwxr-xr-x  2 {username} {username} 4096 Jun  8 12:34 Documents"""
         return "ls: cannot access '{}': No such file or directory".format(parts[1])
     elif base_cmd == "uname":
         if "-a" in parts:
-            return "Linux abhimanyu 5.15.0-1036-aws #38-Ubuntu SMP Thu Jun 8 12:34:56 UTC 2025 x86_64 x86_64 x86_64 GNU/Linux"
+            return "Linux abhimanyu 5.15.0-1036-gcp #38-Ubuntu SMP Thu Jun 8 12:34:56 UTC 2025 x86_64 x86_64 x86_64 GNU/Linux"
         return "Linux"
     elif base_cmd == "ps":
         if "-ef" in parts or "aux" in parts:
