@@ -19,3 +19,47 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+Apache License
+                           Version 2.0, January 2004
+                        http://www.apache.org/licenses/
+
+TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
+
+1. Definitions.
+
+   "License" shall mean the terms and conditions for use, reproduction,
+   and distribution as defined by Sections 1 through 9 of this document.
+
+2. Grant of License.
+
+   Subject to the terms and conditions of this License, you are granted
+   a worldwide, royalty-free, non-exclusive, perpetual, and irrevocable
+   license to use, reproduce, prepare derivative works of, publicly
+   display, publicly perform, sublicense, and distribute the Work and
+   such Derivative Works in Source or Object form.
+
+3. Conditions.
+
+   - You must provide a copy of this License in any distribution of
+     substantial portions of the Work or Derivative Works.
+   - Include a file documenting the changes made to the original code.
+   - Display prominent notices stating the modification.
+
+   [Additional conditions and disclaimers may be added here.]
+
+END OF TERMS AND CONDITIONS
+
+Copyright (2025) (d6falcon)
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may
+not use this file except in compliance with the License. You may obtain
+a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
