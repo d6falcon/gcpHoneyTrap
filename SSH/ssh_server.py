@@ -17,15 +17,15 @@ import uuid
 from base64 import b64encode
 from operator import itemgetter
 from langchain_openai import ChatOpenAI
-from langchain_aws import ChatBedrock, ChatBedrockConverse
-from langchain_google_genai import    elif command == "history":
-        if username in user_command_history:
+#from langchain_aws import ChatBedrock, ChatBedrockConverse
+from langchain_google_genai import ChatGoogleGenerativeAI
+'''if username in user_command_history:
             history = user_command_history[username]
             return "\n".join(f"{idx + 1}  {cmd}" for idx, cmd in enumerate(history))
         return "No command history available."
         
-    elif command == "whoami":
-        return username  # Return username string as outputhatGoogleGenerativeAI
+elif command == "whoami":
+return username  # Return username string as outputhatGoogleGenerativeAI'''
 from langchain_ollama import ChatOllama 
 from langchain_core.messages import HumanMessage, SystemMessage, trim_messages
 from langchain_core.chat_history import BaseChatMessageHistory, InMemoryChatMessageHistory
