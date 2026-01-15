@@ -17,15 +17,8 @@ import uuid
 from base64 import b64encode
 from operator import itemgetter
 from langchain_openai import ChatOpenAI
-#from langchain_aws import ChatBedrock, ChatBedrockConverse
 from langchain_google_genai import ChatGoogleGenerativeAI
-'''if username in user_command_history:
-            history = user_command_history[username]
-            return "\n".join(f"{idx + 1}  {cmd}" for idx, cmd in enumerate(history))
-        return "No command history available."
-        
-elif command == "whoami":
-return username  # Return username string as outputhatGoogleGenerativeAI'''
+from langchain_aws import ChatBedrockConverse
 from langchain_ollama import ChatOllama 
 from langchain_core.messages import HumanMessage, SystemMessage, trim_messages
 from langchain_core.chat_history import BaseChatMessageHistory, InMemoryChatMessageHistory
@@ -40,7 +33,14 @@ user_command_history: Dict[str, List[str]] = {}
 MAX_HISTORY_SIZE = 30
 
 def add_to_history(username: str, command: str):
-    """Add command to user's history, maintaining max size of 30 commands"""
+    """Add command to user's command history with size limit enforcement.
+    
+    Maintains a rolling history of commands (max 30) for each user session.
+    
+    Args:
+        username: Username whose history is being tracked
+        command: Command to add to history
+    """
     if username not in user_command_history:
         user_command_history[username] = []
     user_command_history[username].append(command)
@@ -48,6 +48,12 @@ def add_to_history(username: str, command: str):
         user_command_history[username].pop(0)
 
 class JSONFormatter(logging.Formatter):
+    """Custom logging formatter that outputs JSON-formatted log records.
+    
+    Converts log records into JSON format with comprehensive context including
+    timestamps, connection details, and sensor information for structured logging
+    and analysis.
+    """
     def __init__(self, sensor_name, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.sensor_name = sensor_name
@@ -74,11 +80,24 @@ class JSONFormatter(logging.Formatter):
         return json.dumps(log_record)
 
 class MySSHServer(asyncssh.SSHServer):
+    """Custom SSH server implementation for honeypot functionality.
+    
+    Manages SSH connections, authentication, and session lifecycle events
+    while maintaining connection metadata for logging and analysis.
+    """
     def __init__(self):
         super().__init__()
         self.summary_generated = False
 
     def connection_made(self, conn: asyncssh.SSHServerConnection) -> None:
+        """Handle new SSH connection.
+        
+        Extracts and logs source/destination connection details for monitoring
+        and analysis.
+        
+        Args:
+            conn: The SSH server connection
+        """
         # Get the source and destination IPs and ports
         peername = conn.get_extra_info('peername')
         sockname = conn.get_extra_info('sockname')
@@ -103,6 +122,13 @@ class MySSHServer(asyncssh.SSHServer):
         logger.info("SSH connection received", extra={"src_ip": src_ip, "src_port": src_port, "dst_ip": dst_ip, "dst_port": dst_port})
 
     def connection_lost(self, exc: Optional[Exception]) -> None:
+        """Handle SSH connection closure.
+        
+        Logs connection termination and triggers session summary if available.
+        
+        Args:
+            exc: Exception that caused closure, if any
+        """
         if exc:
             logger.error('SSH connection error', extra={"error": str(exc)})
             if not isinstance(exc, ConnectionLost):
@@ -114,6 +140,14 @@ class MySSHServer(asyncssh.SSHServer):
             asyncio.create_task(session_summary(self._process, self._llm_config, self._session, self))
 
     def begin_auth(self, username: str) -> bool:
+        """Initiate authentication process.
+        
+        Args:
+            username: Username attempting to authenticate
+            
+        Returns:
+            True if username exists, False otherwise
+        """
         if accounts.get(username) != '':
             logger.info("User attempting to authenticate", extra={"username": username})
             return True
@@ -122,15 +156,31 @@ class MySSHServer(asyncssh.SSHServer):
             return False
 
     def password_auth_supported(self) -> bool:
+        """Enable password-based authentication."""
         return True
+        
     def host_based_auth_supported(self) -> bool:
+        """Disable host-based authentication."""
         return False
+        
     def public_key_auth_supported(self) -> bool:
+        """Disable public key authentication."""
         return False
+        
     def kbdinit_auth_supported(self) -> bool:
+        """Disable keyboard-interactive authentication."""
         return False
 
     def validate_password(self, username: str, password: str) -> bool:
+        """Validate user credentials.
+        
+        Args:
+            username: Username to validate
+            password: Password to validate
+            
+        Returns:
+            True if credentials are valid, False otherwise
+        """
         pw = accounts.get(username, '*')
         
         if pw == '*' or (pw != '*' and password == pw):
@@ -141,6 +191,14 @@ class MySSHServer(asyncssh.SSHServer):
             return False
 
 async def session_summary(process: asyncssh.SSHServerProcess, llm_config: dict, session: RunnableWithMessageHistory, server: MySSHServer):
+    """Generate and log session summary with threat assessment from LLM.
+    
+    Args:
+        process: SSH server process
+        llm_config: LLM configuration dictionary
+        session: Runnable session with message history
+        server: SSH server instance
+    """
     # Check if the summary has already been generated
     if server.summary_generated:
         return
@@ -176,15 +234,20 @@ not need to explain every command, just provide the highlights or
 representative examples.
 '''
 
-    # Ask the LLM for its summary
-    llm_response = await session.ainvoke(
-        {
-            "messages": [HumanMessage(content=prompt)],
-            "username": process.get_extra_info('username'),
-            "interactive": True  # Ensure interactive flag is passed
-        },
-            config=llm_config
-    )
+    try:
+        # Ask the LLM for its summary
+        llm_response = await session.ainvoke(
+            {
+                "messages": [HumanMessage(content=prompt)],
+                "username": process.get_extra_info('username'),
+                "interactive": True  # Ensure interactive flag is passed
+            },
+                config=llm_config
+        )
+    except Exception as e:
+        logger.error("Failed to generate session summary", extra={"error": str(e)})
+        server.summary_generated = True
+        return
 
     # Kindly extract security judgement from LLM response
     # Default value is kept as UNKNOWN until proper analysis
@@ -201,6 +264,15 @@ representative examples.
     server.summary_generated = True
 
 async def handle_client(process: asyncssh.SSHServerProcess, server: MySSHServer) -> None:
+    """Main handler for SSH client connections.
+    
+    Manages interactive and non-interactive sessions, command execution,
+    LLM interaction, and session timeout enforcement.
+    
+    Args:
+        process: SSH server process instance
+        server: SSH server instance
+    """
     # Kindly note this is main loop for handling all SSH client connections
     # All user interaction must be implemented here only. No exceptions.
 
@@ -209,6 +281,7 @@ async def handle_client(process: asyncssh.SSHServerProcess, server: MySSHServer)
     last_activity = datetime.datetime.now()
 
     def check_timeout():  # Function to validate session timeout
+        """Check if session has timed out due to inactivity."""
         if (datetime.datetime.now() - last_activity).total_seconds() > TIMEOUT_SECONDS:
             logger.info("Session timeout - no activity for 2 minutes", extra={"username": process.get_extra_info('username')})
             process.stdout.write("\nSession timed out after 2 minutes of inactivity\n")
@@ -219,7 +292,8 @@ async def handle_client(process: asyncssh.SSHServerProcess, server: MySSHServer)
     # Give each session a unique name
     task_uuid = f"session-{uuid.uuid4()}"
     current_task = asyncio.current_task()
-    current_task.set_name(task_uuid)
+    if current_task:
+        current_task.set_name(task_uuid)
 
     llm_config = {"configurable": {"session_id": task_uuid}}
     username = process.get_extra_info('username')
@@ -259,7 +333,7 @@ Last login: {} UTC from {}
             command = process.command
             logger.info("User input", extra={"details": b64encode(command.encode('utf-8')).decode('utf-8'), "interactive": False})
             
-            # Add command to history before handling
+            # Add command to history
             if command.strip() and not command.strip().startswith("history"):
                 add_to_history(username, command.strip())
                 
@@ -307,10 +381,7 @@ Last login: {} UTC from {}
                 line = line.rstrip('\n')
                 logger.info("User input", extra={"details": b64encode(line.encode('utf-8')).decode('utf-8'), "interactive": True})
 
-                # Add command to user history
-                add_to_history(username, line)
-
-                # Add command to history before handling
+                # Add command to history
                 if line.strip() and not line.strip().startswith("history"):
                     add_to_history(username, line.strip())
                 
@@ -343,12 +414,12 @@ Last login: {} UTC from {}
         await session_summary(process, llm_config, with_message_history, server)
         process.exit(0)
 
-    # Kindly note this is fallback exit point
-    # Normal execution should not reach here
-    # If reached, gracefully terminate with exit code 0
-    # process.exit(0)
-
 async def start_server() -> None:
+    """Initialize and start the SSH honeypot server.
+    
+    Configures asyncssh server with proper handler factories and credentials,
+    then begins accepting connections on the configured port.
+    """
     async def process_factory(process: asyncssh.SSHServerProcess) -> None:
         server = process.get_server()
         await handle_client(process, server)
@@ -375,14 +446,22 @@ async def start_server() -> None:
     )
 
 class ContextFilter(logging.Filter):
-    """
-    Dear team, this filter is implemented for adding current asyncio task name into log record.
-    The same will help in grouping all events of one session properly. Kindly note this is
-    very crucial for log analysis.
+    """Logging filter that adds session context and connection details to records.
+    
+    Enriches log records with current asyncio task name and connection metadata
+    (source/destination IPs and ports) for comprehensive session tracking and analysis.
+    This is crucial for grouping events by session in log analysis.
     """
 
     def filter(self, record):
-
+        """Add context information to the log record.
+        
+        Args:
+            record: Log record to enhance
+            
+        Returns:
+            True to allow record to be logged
+        """
         task = asyncio.current_task()
         if task:
             task_name = task.get_name()
@@ -399,11 +478,27 @@ class ContextFilter(logging.Filter):
         return True
 
 def llm_get_session_history(session_id: str) -> BaseChatMessageHistory:
+    """Retrieve or create message history for a session.
+    
+    Args:
+        session_id: Unique session identifier
+        
+    Returns:
+        Chat message history for the session
+    """
     if session_id not in llm_sessions:
         llm_sessions[session_id] = InMemoryChatMessageHistory()
     return llm_sessions[session_id]
 
 def get_user_accounts() -> dict:
+    """Load user accounts from configuration.
+    
+    Returns:
+        Dictionary mapping usernames to passwords
+        
+    Raises:
+        ValueError: If no user accounts are configured
+    """
     if (not 'user_accounts' in config) or (len(config.items('user_accounts')) == 0):
         raise ValueError("No user accounts found in configuration file.")
     
@@ -415,33 +510,52 @@ def get_user_accounts() -> dict:
     return accounts
 
 def choose_llm(llm_provider: Optional[str] = None, model_name: Optional[str] = None):
-    llm_provider_name = llm_provider or config['llm'].get("llm_provider", "openai")
-    llm_provider_name = llm_provider_name.lower()
+    """Initialize and return the appropriate LLM client based on configuration.
+    
+    Args:
+        llm_provider: LLM provider name (openai, ollama, aws, gemini)
+        model_name: Model name/identifier for the selected provider
+        
+    Returns:
+        Initialized LLM client instance
+        
+    Raises:
+        ValueError: If LLM provider is not supported
+    """
+    llm_provider_name = (llm_provider or config['llm'].get("llm_provider", "openai")).lower()
     model_name = model_name or config['llm'].get("model_name", "gpt-3.5-turbo")
 
     if llm_provider_name == 'openai':
-        llm_model = ChatOpenAI(
-            model=model_name
-        )
+        return ChatOpenAI(model=model_name)
     elif llm_provider_name == 'ollama':
-            llm_model = ChatOllama(
-            model=model_name
-        )
+        return ChatOllama(model=model_name)
     elif llm_provider_name == 'aws':
-        llm_model = ChatBedrockConverse(
+        return ChatBedrockConverse(
             model=model_name,
             region_name=config['llm'].get("aws_region", "us-east-1"),
-            credentials_profile_name=config['llm'].get("aws_credentials_profile", "default")        )
-    elif llm_provider_name == 'gemini':
-        llm_model = ChatGoogleGenerativeAI(
-            model=model_name,
+            credentials_profile_name=config['llm'].get("aws_credentials_profile", "default")
         )
+    elif llm_provider_name == 'gemini':
+        return ChatGoogleGenerativeAI(model=model_name)
     else:
-        raise ValueError(f"Invalid LLM provider {llm_provider_name}.")
-
-    return llm_model
+        raise ValueError(f"Invalid LLM provider '{llm_provider_name}'. Supported providers: openai, ollama, aws, gemini")
 
 def get_prompts(prompt: Optional[str], prompt_file: Optional[str]) -> dict:
+    """Load system and user prompts for LLM configuration.
+    
+    Retrieves system prompt from config and user prompt from command-line,
+    file, or default prompt.txt. Validates that prompts are non-empty.
+    
+    Args:
+        prompt: Direct prompt text (takes precedence)
+        prompt_file: Path to prompt file
+        
+    Returns:
+        Dictionary with 'system_prompt' and 'user_prompt' keys
+        
+    Raises:
+        ValueError: If no valid prompt source is found
+    """
     system_prompt = config['llm']['system_prompt']
     if prompt is not None:
         if not prompt.strip():
@@ -465,15 +579,18 @@ def get_prompts(prompt: Optional[str], prompt_file: Optional[str]) -> dict:
     }
 
 def handle_linux_command(command: str, username: str) -> Optional[str]:
-    """
-    Kindly do the needful to emulate basic Linux commands for making our honeypot more realistic.
+    """Emulate basic Linux commands for honeypot realism.
+    
+    Implements common Linux commands (whoami, id, ls, ps, etc.) to simulate
+    a realistic Linux environment. Unhandled commands return None to trigger
+    LLM fallback processing.
     
     Args:
-        command: Command which requires execution
-        username: Current SSH session username provided by user
+        command: Command string to execute
+        username: Current SSH session username
         
     Returns:
-        The output string after command execution, or None if command is not supported
+        Command output string if command is handled, None otherwise
     """
     command = command.strip()
     parts = command.split()
@@ -492,9 +609,9 @@ def handle_linux_command(command: str, username: str) -> Optional[str]:
         return f"/home/{username}"
     elif base_cmd == "ls":
         # Basic ls command
-        if len(parts) == 1 or parts[1] == "." or parts[1] == "./":
+        if len(parts) == 1 or (len(parts) > 1 and parts[1] in [".", "./"]):
             return "bin\nDocuments\nDownloads\nMusic\nPictures\nPublic\nTemplates\nVideos"
-        elif parts[1] == "-la" or parts[1] == "-l":
+        elif len(parts) > 1 and parts[1] in ["-la", "-l"]:
             return f"""total 48
 drwxr-xr-x  4 {username} {username} 4096 Jun  8 12:34 .
 drwxr-xr-x 24 root     root     4096 Jun  8 12:34 ..
@@ -505,7 +622,9 @@ drwx------  2 {username} {username} 4096 Jun  8 12:34 .cache
 -rw-r--r--  1 {username} {username}  256 Jun  8 12:34 .env
 drwxr-xr-x  2 {username} {username} 4096 Jun  8 12:34 bin
 drwxr-xr-x  2 {username} {username} 4096 Jun  8 12:34 Documents"""
-        return "ls: cannot access '{}': No such file or directory".format(parts[1])
+        elif len(parts) > 1:
+            return f"ls: cannot access '{parts[1]}': No such file or directory"
+        return ""
     elif base_cmd == "uname":
         if "-a" in parts:
             return "Linux abhimanyu 5.15.0-1036-gcp #38-Ubuntu SMP Thu Jun 8 12:34:56 UTC 2025 x86_64 x86_64 x86_64 GNU/Linux"
@@ -570,7 +689,8 @@ VISUAL=vi
 EDITOR=vi"""
     elif base_cmd == "cat":
         if len(parts) > 1:
-            if parts[1] == ".kshrc":
+            filepath = parts[1]
+            if filepath == ".kshrc":
                 return f"""# Korn shell configuration
 PS1='[{username}@abhimanyu $PWD]$ '
 set -o emacs
@@ -582,9 +702,9 @@ export PS1 HISTFILE HISTSIZE TMOUT PATH
 
 # Security settings - session timeout after 3 minutes of inactivity
 readonly TMOUT"""
-            elif parts[1] == "/etc/issue":
+            elif filepath == "/etc/issue":
                 return "Ubuntu 22.04.3 LTS \\n \\l"
-            elif parts[1] == "/etc/*release" or parts[1] == "/etc/os-release":
+            elif filepath in ["/etc/os-release", "/etc/*release"]:
                 return '''PRETTY_NAME="Ubuntu 22.04.3 LTS (Jammy Jellyfish)"
 NAME="Ubuntu"
 VERSION_ID="22.04"
@@ -597,14 +717,22 @@ SUPPORT_URL="https://help.ubuntu.com/"
 BUG_REPORT_URL="https://bugs.launchpad.net/ubuntu/"
 PRIVACY_POLICY_URL="https://www.ubuntu.com/legal/terms-and-policies/privacy-policy"
 UBUNTU_CODENAME=jammy'''
-            return f"cat: {parts[1]}: No such file or directory"
+            return f"cat: {filepath}: No such file or directory"
     
-    # Return None for unhandled commands
-    logger.info("Unhandled command", extra={"command": command, "username": username})
+    # Log unhandled commands and return None
+    logger.debug("Unhandled command", extra={"command": command, "username": username})
     return None
 
 def generate_historical_logs(logger, days=14):
-    """Please generate proper historical logs as per requirement to ensure honeypot looks like genuine GCP server. Same is very important for authenticity."""
+    """Generate realistic historical logs to enhance honeypot authenticity.
+    
+    Creates backdated logs simulating normal GCP asset management service
+    activity to make the honeypot appear as an established production system.
+    
+    Args:
+        logger: Logger instance to use for writing logs
+        days: Number of days of historical logs to generate (default: 14)
+    """
     
     # Below mentioned are standard GCP credentials for honeypot
     # Please ensure proper naming convention as per GCP standards
