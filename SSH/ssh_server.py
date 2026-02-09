@@ -9,7 +9,6 @@ import sys
 import json
 import os
 import traceback
-import random
 from typing import Optional, Dict, List
 import logging
 import datetime
@@ -20,7 +19,7 @@ from langchain_openai import ChatOpenAI
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_aws import ChatBedrockConverse
 from langchain_ollama import ChatOllama 
-from langchain_core.messages import HumanMessage, SystemMessage, trim_messages
+from langchain_core.messages import HumanMessage, trim_messages
 from langchain_core.chat_history import BaseChatMessageHistory, InMemoryChatMessageHistory
 from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
@@ -30,22 +29,25 @@ import socket
 
 # Dictionary to store command history for each user
 user_command_history: Dict[str, List[str]] = {}
+user_history_lock = asyncio.Lock()  # Protect against concurrent access
 MAX_HISTORY_SIZE = 30
 
-def add_to_history(username: str, command: str):
+async def add_to_history(username: str, command: str):
     """Add command to user's command history with size limit enforcement.
     
     Maintains a rolling history of commands (max 30) for each user session.
+    Uses locking to prevent race conditions in concurrent sessions.
     
     Args:
         username: Username whose history is being tracked
         command: Command to add to history
     """
-    if username not in user_command_history:
-        user_command_history[username] = []
-    user_command_history[username].append(command)
-    if len(user_command_history[username]) > MAX_HISTORY_SIZE:
-        user_command_history[username].pop(0)
+    async with user_history_lock:
+        if username not in user_command_history:
+            user_command_history[username] = []
+        user_command_history[username].append(command)
+        if len(user_command_history[username]) > MAX_HISTORY_SIZE:
+            user_command_history[username].pop(0)
 
 class JSONFormatter(logging.Formatter):
     """Custom logging formatter that outputs JSON-formatted log records.
@@ -62,11 +64,11 @@ class JSONFormatter(logging.Formatter):
         log_record = {
             "timestamp": datetime.datetime.fromtimestamp(record.created, datetime.timezone.utc).isoformat(sep="T", timespec="milliseconds"),
             "level": record.levelname,
-            "task_name": record.task_name,
-            "src_ip": record.src_ip,
-            "src_port": record.src_port,
-            "dst_ip": record.dst_ip,
-            "dst_port": record.dst_port,
+            "task_name": getattr(record, "task_name", "-"),
+            "src_ip": getattr(record, "src_ip", "-"),
+            "src_port": getattr(record, "src_port", "-"),
+            "dst_ip": getattr(record, "dst_ip", "-"),
+            "dst_port": getattr(record, "dst_port", "-"),
             "message": record.getMessage(),
             "sensor_name": self.sensor_name,
             "sensor_protocol": "ssh"
@@ -184,10 +186,10 @@ class MySSHServer(asyncssh.SSHServer):
         pw = accounts.get(username, '*')
         
         if pw == '*' or (pw != '*' and password == pw):
-            logger.info("Authentication success", extra={"username": username, "password": password})
+            logger.info("Authentication success", extra={"username": username})
             return True
         else:
-            logger.info("Authentication failed", extra={"username": username, "password": password})
+            logger.info("Authentication failed", extra={"username": username})
             return False
 
 async def session_summary(process: asyncssh.SSHServerProcess, llm_config: dict, session: RunnableWithMessageHistory, server: MySSHServer):
@@ -244,6 +246,11 @@ representative examples.
             },
                 config=llm_config
         )
+        # Validate response object
+        if not hasattr(llm_response, 'content') or llm_response.content is None:
+            logger.error("LLM response missing content field")
+            server.summary_generated = True
+            return
     except Exception as e:
         logger.error("Failed to generate session summary", extra={"error": str(e)})
         server.summary_generated = True
@@ -282,6 +289,7 @@ async def handle_client(process: asyncssh.SSHServerProcess, server: MySSHServer)
 
     def check_timeout():  # Function to validate session timeout
         """Check if session has timed out due to inactivity."""
+        nonlocal last_activity
         if (datetime.datetime.now() - last_activity).total_seconds() > TIMEOUT_SECONDS:
             logger.info("Session timeout - no activity for 2 minutes", extra={"username": process.get_extra_info('username')})
             process.stdout.write("\nSession timed out after 2 minutes of inactivity\n")
@@ -335,7 +343,8 @@ Last login: {} UTC from {}
             
             # Add command to history
             if command.strip() and not command.strip().startswith("history"):
-                add_to_history(username, command.strip())
+                if username:  # Validate username exists
+                    await add_to_history(username, command.strip())
                 
             # Try to handle Linux command first
             cmd_output = handle_linux_command(command, username)
@@ -375,15 +384,16 @@ Last login: {} UTC from {}
             logger.info("LLM response", extra={"details": b64encode(llm_response.content.encode('utf-8')).decode('utf-8'), "interactive": True})
 
             async for line in process.stdin:
+                last_activity = datetime.datetime.now()
                 if check_timeout():
                     return
-                last_activity = datetime.datetime.now()
                 line = line.rstrip('\n')
                 logger.info("User input", extra={"details": b64encode(line.encode('utf-8')).decode('utf-8'), "interactive": True})
 
                 # Add command to history
                 if line.strip() and not line.strip().startswith("history"):
-                    add_to_history(username, line.strip())
+                    if username:  # Validate username exists
+                        await add_to_history(username, line.strip())
                 
                 # Try to handle Linux command first
                 cmd_output = handle_linux_command(line, username)
@@ -430,7 +440,7 @@ async def start_server() -> None:
         reuse_port=True,
         server_factory=MySSHServer,
         server_host_keys=config['ssh'].get("host_priv_key", "ssh_host_key"),
-        process_factory=lambda process: handle_client(process, MySSHServer()),
+        process_factory=process_factory,
         server_version=config['ssh'].get("server_version_string", "SSH-2.0-OpenSSH_8.2p1 Ubuntu-4ubuntu0.3"),
         banner="""
 ╔════════════════════════ WARNING ════════════════════════╗
@@ -556,7 +566,11 @@ def get_prompts(prompt: Optional[str], prompt_file: Optional[str]) -> dict:
     Raises:
         ValueError: If no valid prompt source is found
     """
-    system_prompt = config['llm']['system_prompt']
+    system_prompt = config['llm'].get('system_prompt', '')
+    if not system_prompt.strip():
+        print("Error: system_prompt in config cannot be empty.", file=sys.stderr)
+        sys.exit(1)
+    
     if prompt is not None:
         if not prompt.strip():
             print("Error: The prompt text cannot be empty.", file=sys.stderr)
@@ -566,11 +580,19 @@ def get_prompts(prompt: Optional[str], prompt_file: Optional[str]) -> dict:
         if not os.path.exists(prompt_file):
             print(f"Error: The specified prompt file '{prompt_file}' does not exist.", file=sys.stderr)
             sys.exit(1)
-        with open(prompt_file, "r") as f:
-            user_prompt = f.read()
+        try:
+            with open(prompt_file, "r", encoding="utf-8") as f:
+                user_prompt = f.read()
+        except IOError as e:
+            print(f"Error reading prompt file: {e}", file=sys.stderr)
+            sys.exit(1)
     elif os.path.exists("prompt.txt"):
-        with open("prompt.txt", "r") as f:
-            user_prompt = f.read()
+        try:
+            with open("prompt.txt", "r", encoding="utf-8") as f:
+                user_prompt = f.read()
+        except IOError as e:
+            print(f"Error reading prompt.txt: {e}", file=sys.stderr)
+            sys.exit(1)
     else:
         raise ValueError("Either prompt or prompt_file must be provided.")
     return {
